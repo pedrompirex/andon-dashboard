@@ -635,8 +635,8 @@ with left:
         """
 <div class="header-left">
   <div>
-    <div class="h-title">Andon Dashboard</div>
-    <div class="h-sub">3 lines • 6 stations per line • physical button events</div>
+    <div class="h-title">RTPV</div>
+    <div class="h-sub">Real Time Production Visibility</div>
   </div>
 </div>
 """,

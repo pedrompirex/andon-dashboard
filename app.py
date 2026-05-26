@@ -11,6 +11,14 @@ from supabase import create_client
 st.set_page_config(page_title="Andon Dashboard", layout="wide")
 
 # ======================================================
+# Demo / Professor view (read-only) via query param
+# URL: https://andon-dashboard-eiit.streamlit.app/?view=professor
+# ======================================================
+VIEW = st.query_params.get("view", "normal")
+IS_PROFESSOR_VIEW = (VIEW == "professor")
+PROFESSOR_VIEW_URL = "https://andon-dashboard-eiit.streamlit.app/?view=professor"
+
+# ======================================================
 # Supabase (server-side)
 # ======================================================
 @st.cache_resource
@@ -140,6 +148,14 @@ div.stButton > button.op-phys:active{
 """,
     unsafe_allow_html=True,
 )
+
+# Professor/Demo banner (pure UI)
+if IS_PROFESSOR_VIEW:
+    st.info(
+        "Professor/Demo view (read-only): you can change roles and browse views, "
+        "but Refresh and any actions that would change the database are blocked."
+    )
+    st.code(PROFESSOR_VIEW_URL, language="text")
 
 # ======================================================
 # Constants / Roles
@@ -332,6 +348,22 @@ def sb_update_event(event_id: str, patch: Dict[str, Any]) -> None:
             patch[k] = to_iso(patch[k])
     sb.table(SB_TABLE).update(patch).eq("id", event_id).execute()
 
+# ---- Safe wrappers: block DB writes in Professor/Demo view ----
+def write_blocked_msg(action: str = "This action") -> None:
+    st.warning(f"Professor/Demo view (read-only): {action} is blocked (no database changes).")
+
+def sb_upsert_event_safe(e: Event) -> None:
+    if IS_PROFESSOR_VIEW:
+        write_blocked_msg("Creating/upserting events")
+        return
+    sb_upsert_event(e)
+
+def sb_update_event_safe(event_id: str, patch: Dict[str, Any]) -> None:
+    if IS_PROFESSOR_VIEW:
+        write_blocked_msg("Updating events (Ack/Close/Assign/Override)")
+        return
+    sb_update_event(event_id, patch)
+
 # ======================================================
 # Session initialization
 # ======================================================
@@ -400,6 +432,8 @@ def can_view_line(role: str, line: str) -> bool:
     return line in visible_lines_for_user(role)
 
 def can_ack(role: str, sev: str) -> bool:
+    if IS_PROFESSOR_VIEW:
+        return False
     if sev == SEVERITY_INFO:
         return False
     if role in OP_ROLES:
@@ -407,6 +441,8 @@ def can_ack(role: str, sev: str) -> bool:
     return role in ("MAINTENANCE", "ADMIN", "LM_A", "LM_B", "LM_C")
 
 def can_close_event(role: str, sev: str) -> bool:
+    if IS_PROFESSOR_VIEW:
+        return False
     if sev == SEVERITY_INFO:
         return False
     if role in OP_ROLES:
@@ -418,9 +454,13 @@ def can_close_event(role: str, sev: str) -> bool:
     return False
 
 def can_assign(role: str) -> bool:
+    if IS_PROFESSOR_VIEW:
+        return False
     return role == "ADMIN"
 
 def can_override(role: str) -> bool:
+    if IS_PROFESSOR_VIEW:
+        return False
     return role == "ADMIN"
 
 # ======================================================
@@ -501,7 +541,7 @@ def create_physical_button_sim_event(line: str, station: int, severity: str,
         part_serial=scan_code,
         created_at=now(),
     )
-    sb_upsert_event(e)
+    sb_upsert_event_safe(e)
 
 def create_info_event(line: str, station: int, opened_by_user: str, opened_by_name: str, note: str) -> None:
     e = Event(
@@ -521,7 +561,7 @@ def create_info_event(line: str, station: int, opened_by_user: str, opened_by_na
         closed_by_name=opened_by_name,
         closed_at=now(),
     )
-    sb_upsert_event(e)
+    sb_upsert_event_safe(e)
 
 # ======================================================
 # Maint/Admin overview helpers
@@ -662,10 +702,12 @@ with mid:
         st.session_state.username = default_username_for(role, chosen)
 
     with c3:
-        if st.button("Refresh", use_container_width=True):
+        if st.button("Refresh", use_container_width=True, disabled=IS_PROFESSOR_VIEW):
             # reload events from DB
             st.session_state.events = sb_list_events(visible_lines_for_user(st.session_state.role))
             st.rerun()
+        if IS_PROFESSOR_VIEW:
+            st.caption("Refresh is disabled in Professor/Demo view.")
 
 with right:
     role = st.session_state.role
@@ -724,10 +766,10 @@ if role in OP_ROLES:
 
         st.markdown("<div class='op-phys-wrap'>", unsafe_allow_html=True)
 
-        b_red = st.button("Red", use_container_width=False, key=f"op_btn_red_{role}")
-        b_yellow = st.button("Yellow", use_container_width=False, key=f"op_btn_yellow_{role}")
-        b_green = st.button("Green", use_container_width=False, key=f"op_btn_green_{role}")
-        b_call = st.button("Call", use_container_width=False, key=f"op_btn_calllm_{role}")
+        b_red = st.button("Red", use_container_width=False, key=f"op_btn_red_{role}", disabled=IS_PROFESSOR_VIEW)
+        b_yellow = st.button("Yellow", use_container_width=False, key=f"op_btn_yellow_{role}", disabled=IS_PROFESSOR_VIEW)
+        b_green = st.button("Green", use_container_width=False, key=f"op_btn_green_{role}", disabled=IS_PROFESSOR_VIEW)
+        b_call = st.button("Call", use_container_width=False, key=f"op_btn_calllm_{role}", disabled=IS_PROFESSOR_VIEW)
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -749,8 +791,18 @@ if role in OP_ROLES:
             unsafe_allow_html=True,
         )
 
-        op_name = st.text_input("Operator name", placeholder="e.g., Cristiano Ronaldo", key=f"open_operator_name_{role}")
-        scan_code = st.text_input("Scan Code (Yellow/Red)", placeholder="e.g., SCAN-00012345", key=f"open_scan_code_{role}")
+        op_name = st.text_input(
+            "Operator name",
+            placeholder="e.g., Cristiano Ronaldo",
+            key=f"open_operator_name_{role}",
+            disabled=IS_PROFESSOR_VIEW,
+        )
+        scan_code = st.text_input(
+            "Scan Code (Yellow/Red)",
+            placeholder="e.g., SCAN-00012345",
+            key=f"open_scan_code_{role}",
+            disabled=IS_PROFESSOR_VIEW,
+        )
 
         if b_red:
             if not op_name.strip():
@@ -802,7 +854,7 @@ if role in OP_ROLES:
                         and e.status != EVENT_CLOSED
                         and e.severity in (SEVERITY_YELLOW, SEVERITY_RED)
                     ):
-                        sb_update_event(e.id, {
+                        sb_update_event_safe(e.id, {
                             "status": EVENT_CLOSED,
                             "closed_by": user,
                             "closed_by_name": user_name,
@@ -858,7 +910,7 @@ if role in OP_ROLES:
 
         st.markdown("---")
         st.markdown("#### Library (Uploaded PDFs)")
-        can_upload_docs = st.session_state.role in ("ADMIN", "MAINTENANCE")
+        can_upload_docs = st.session_state.role in ("ADMIN", "MAINTENANCE") and (not IS_PROFESSOR_VIEW)
         up_col, view_col = st.columns([1.0, 1.2], gap="large")
 
         with up_col:
@@ -884,7 +936,7 @@ if role in OP_ROLES:
                         st.success(f"Added {added} document(s).")
                         st.rerun()
             else:
-                st.info("Uploads are restricted. Ask Admin/Maintenance to add PDFs.")
+                st.info("Uploads are restricted.")
 
             if st.session_state.op_docs and can_upload_docs:
                 if st.button("Clear library", type="secondary", use_container_width=True, key="clear_docs"):
@@ -1126,7 +1178,7 @@ with detail_col:
             with c1:
                 ack_disabled = (not can_ack(role, ev.severity)) or ev.status in (EVENT_ACK, EVENT_CLOSED)
                 if st.button("Ack", use_container_width=True, disabled=ack_disabled, key=f"ack_{ev.id}"):
-                    sb_update_event(ev.id, {
+                    sb_update_event_safe(ev.id, {
                         "status": EVENT_ACK,
                         "ack_by": st.session_state.username,
                         "ack_by_name": current_user_name(),
@@ -1141,7 +1193,7 @@ with detail_col:
                     if not failure_text.strip():
                         st.error("Failure description is required to close.")
                     else:
-                        sb_update_event(ev.id, {
+                        sb_update_event_safe(ev.id, {
                             "status": EVENT_CLOSED,
                             "closed_by": st.session_state.username,
                             "closed_by_name": current_user_name(),
@@ -1176,7 +1228,7 @@ with detail_col:
                     if st.button("Assign", use_container_width=True, disabled=assign_disabled, key=f"assign_{ev.id}"):
                         stamp = now().strftime("%H:%M:%S")
                         note_append = f"\n[{stamp}] Assigned to {assigned_choice} by {current_user_name()} ({st.session_state.username})"
-                        sb_update_event(ev.id, {
+                        sb_update_event_safe(ev.id, {
                             "assigned_to": default_username_for("MAINTENANCE", assigned_choice),
                             "assigned_to_name": assigned_choice,
                             "assigned_at": now(),
@@ -1219,7 +1271,11 @@ st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 # Bottom: Event Feed (non-OP only)
 # ======================================================
 with st.expander("Event Feed", expanded=False):
-    st.caption("No auto-refresh. Use **Refresh** at the top or F5.")
+    if IS_PROFESSOR_VIEW:
+        st.caption("Professor/Demo view: Refresh is disabled. (You can still browse existing data.)")
+    else:
+        st.caption("No auto-refresh. Use **Refresh** at the top or F5.")
+
     role = st.session_state.role
     visible_lines = visible_lines_for_user(role)
 
